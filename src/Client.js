@@ -236,7 +236,7 @@ export default class EthClient extends EventEmitter {
 
   // Sending transactions
 
-  sendETH(params: SendParams) {
+  async sendETH(params: SendParams): Promise<TXEventEmitter> {
     const valueWei = toWei(String(params.value))
     const valueHex = toHex(valueWei)
     const txParams = {
@@ -244,7 +244,7 @@ export default class EthClient extends EventEmitter {
       from: params.from,
       value: valueHex,
     }
-    return this.sendAndListen(txParams, params.confirmations)
+    return await this.sendAndListen(txParams, params.confirmations)
   }
 
   async getConfirmations(txHash: string): Promise<?number> {

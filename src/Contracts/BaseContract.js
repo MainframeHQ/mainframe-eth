@@ -3,6 +3,7 @@
 import Web3EthAbi from 'web3-eth-abi'
 
 import type EthClient from '../Client'
+import type { TXEventEmitter } from '../types'
 
 export default class Contract {
   _ethClient: EthClient
@@ -35,9 +36,9 @@ export default class Contract {
     return abi
   }
 
-  encodeCall(name: string, params?: Array<any>) {
+  encodeCall(name: string, params?: Array<any> = []) {
     const abi = this.getFunctionABI(name)
-    return Web3EthAbi.encodeFunctionCall(abi, params || [])
+    return Web3EthAbi.encodeFunctionCall(abi, params)
   }
 
   decodeCallResult(name: string, result: Object): any {
@@ -55,45 +56,38 @@ export default class Contract {
   }
 
   async call(method: string, params?: Array<any>) {
-    const data = this.encodeCall(method, params)
     const res = await this.ethClient.send('eth_call', [
-      { data, to: this.address },
+      { data: this.encodeCall(method, params), to: this.address },
       'latest',
     ])
     return this.decodeCallResult(method, res)
   }
 
-  async send(method: string, params: Array<any>, options: Object) {
-    const data = this.encodeCall(method, params)
-    const txParams = { ...options, to: this.address, data }
-    return this.ethClient.sendAndListen(txParams)
+  async send(
+    method: string,
+    params: Array<any>,
+    options: Object,
+  ): Promise<TXEventEmitter> {
+    return await this.ethClient.sendAndListen({
+      ...options,
+      to: this.address,
+      data: this.encodeCall(method, params),
+    })
   }
 
-  // Topics should not include the event signature
-
-  decodeEventLog(eventName: string, log: Object) {
+  decodeEventLog(eventName: string, log: Object): Object {
     const abi = this.abi.find(abi => {
       return abi.type === 'event' && abi.name === eventName
     })
     if (!abi) {
       throw new Error(`Event '${eventName}' not found in ABI`)
     }
-    const inputs = [
-      {
-        indexed: true,
-        name: 'signature',
-        type: 'string',
-      },
-      ...abi.inputs,
-    ]
-    // Remove event sig topic as expected by decodeLog
-    const topics = log.topics.slice(1)
-    return Web3EthAbi.decodeLog(inputs, log.data, topics)
+    return Web3EthAbi.decodeLog(abi.inputs, log.data, log.topics.slice(1))
   }
 
   async subscribeToEvents(
     name: string,
-    topics: Array<string>,
+    topics: Array<string> = [],
   ): Promise<string> {
     if (!this.ethClient.web3Provider.subscribe) {
       throw new Error('Subscriptions not supported')
@@ -105,15 +99,10 @@ export default class Contract {
       throw new Error(`Event '${name}' not found in ABI`)
     }
     const encodedSig = Web3EthAbi.encodeEventSignature(abi)
-    if (topics) {
-      topics.unshift(encodedSig)
-    } else {
-      topics = [encodedSig]
-    }
     const params = [
       {
         address: this.address,
-        topics: topics,
+        topics: [encodedSig].concat(topics),
       },
     ]
     return this.ethClient.subscribe('logs', params)
@@ -123,18 +112,18 @@ export default class Contract {
     const abi = this.abi.find(abi => {
       return abi.type === 'event' && abi.name === name
     })
-
     if (!abi) {
       throw new Error(`Event '${name}' not found in ABI`)
     }
 
     const encodedSig = Web3EthAbi.encodeEventSignature(abi)
-    const topics = [encodedSig].concat(params.topics || [])
-    params.address = this.address
+    const res = await this.ethClient.getPastEvents({
+      ...params,
+      address: this.address,
+      topics: [encodedSig].concat(params.topics || []),
+    })
 
-    const res = await this.ethClient.getPastEvents({ ...params, topics })
     const events = []
-
     res.forEach(log => {
       try {
         const event = this.decodeEventLog(name, log)
